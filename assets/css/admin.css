@@ -1,0 +1,16 @@
+.sva-wrap .sva-card { background: #fff; border: 1px solid #dcdcde; border-radius: 10px; padding: 16px 20px; margin: 16px 0; max-width: 1100px; }
+.sva-wrap .sva-card h2 { margin-top: 4px; }
+.sva-muted { color: #646970; }
+.sva-warn { color: #b32d2e; font-weight: 600; }
+.sva-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; max-width: 1100px; }
+.sva-grid .sva-card { margin: 0; }
+.sva-stat span { display: block; color: #646970; font-size: 12px; }
+.sva-stat strong { display: block; font-size: 20px; margin-top: 4px; }
+.sva-progress { max-width: 600px; }
+.sva-bar { height: 10px; background: #f0f0f1; border-radius: 99px; overflow: hidden; }
+.sva-bar span { display: block; height: 100%; width: 0; background: #2271b1; transition: width .3s; }
+.sva-keys input { width: 100%; }
+.sva-tag { display: inline-block; background: #f0f6fc; border: 1px solid #c5d9ed; border-radius: 99px; padding: 2px 10px; margin: 2px; text-decoration: none; }
+.sva-test { display: flex; gap: 8px; flex-wrap: wrap; }
+.sva-test-out { margin-top: 12px; }
+.sva-test-text { white-space: pre-wrap; background: #f6f7f7; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; line-height: 1.8; }
