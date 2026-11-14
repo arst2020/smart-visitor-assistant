@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Smart Visitor Assistant – دستیار هوشمند بازدیدکننده
  * Description:       دستیار هوشمند چت برای بازدیدکنندگان سایت. بعد از نصب، سایت را خودش بررسی و تحلیل می‌کند (برگه‌ها، نوشته‌ها، محصولات ووکامرس، منوها و اطلاعات تماس)، نوع سایت را تشخیص می‌دهد و بازدیدکننده را به خدمات، محصولات و بخش‌هایی مثل نوبت‌دهی راهنمایی می‌کند. با و بدون هوش مصنوعی (Claude یا سرویس‌های سازگار با OpenAI) کار می‌کند.
- * Version:           1.1.0
+ * Version:           1.2.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            nfpsmart
@@ -12,7 +12,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'SVA_VERSION', '1.1.0' );
+define( 'SVA_VERSION', '1.2.0' );
 define( 'SVA_DB_VERSION', '1' );
 define( 'SVA_FILE', __FILE__ );
 define( 'SVA_DIR', plugin_dir_path( __FILE__ ) );
@@ -28,7 +28,14 @@ require_once SVA_DIR . 'includes/class-sva-ai.php';
 require_once SVA_DIR . 'includes/class-sva-chat.php';
 require_once SVA_DIR . 'includes/class-sva-frontend.php';
 require_once SVA_DIR . 'includes/class-sva-admin.php';
+require_once SVA_DIR . 'includes/class-sva-updater.php';
 
 register_activation_hook( __FILE__, array( 'SVA_Plugin', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'SVA_Plugin', 'deactivate' ) );
 add_action( 'plugins_loaded', array( 'SVA_Plugin', 'init' ) );
+add_action(
+	'plugins_loaded',
+	function () {
+		new SVA_Updater( SVA_FILE, 'arst2020/smart-visitor-assistant', SVA_VERSION, 'smart-visitor-assistant' );
+	}
+);

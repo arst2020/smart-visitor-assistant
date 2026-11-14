@@ -12,3 +12,5 @@ foreach ( array( 'sva_settings', 'sva_profile', 'sva_scan_state', 'sva_db_versio
 }
 wp_clear_scheduled_hook( 'sva_weekly_scan' );
 wp_unschedule_hook( 'sva_cron_scan' );
+delete_option( 'smart_visitor_assistant_github_token' );
+delete_site_transient( 'smart_visitor_assistant_gh_release' );
