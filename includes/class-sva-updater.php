@@ -2,7 +2,8 @@
 /**
  * Self-update from GitHub (works with private repositories via a read-only token).
  *
- * New versions are published as git tags (v1.2.3). WordPress then shows the normal
+ * New versions are published by pushing to the "release" branch (the Version: header of the
+ * main plugin file on that branch is the available version). WordPress then shows the normal
  * "update available" notice and the plugin can be updated from Plugins / Dashboard → Updates,
  * including WordPress auto-updates.
  *
@@ -22,6 +23,7 @@ class SVA_Updater {
 	private $page;
 	private $opt;
 	private $cache;
+	private $branch;
 
 	/**
 	 * @param string $file    Main plugin file.
@@ -29,7 +31,8 @@ class SVA_Updater {
 	 * @param string $version Installed version.
 	 * @param string $parent  Admin menu slug to attach the "Updates" page to.
 	 */
-	public function __construct( $file, $repo, $version, $parent ) {
+	public function __construct( $file, $repo, $version, $parent, $branch = 'release' ) {
+		$this->branch   = $branch;
 		$this->file     = $file;
 		$this->basename = plugin_basename( $file );
 		$this->slug     = dirname( $this->basename );
@@ -60,9 +63,9 @@ class SVA_Updater {
 		return (string) get_option( $this->opt, '' );
 	}
 
-	private function api( $path ) {
+	private function api( $path, $raw = false ) {
 		$headers = array(
-			'Accept'               => 'application/vnd.github+json',
+			'Accept'               => $raw ? 'application/vnd.github.raw' : 'application/vnd.github+json',
 			'X-GitHub-Api-Version' => '2022-11-28',
 			'User-Agent'           => 'WordPress/' . get_bloginfo( 'version' ) . '; ' . $this->slug,
 		);
@@ -74,7 +77,8 @@ class SVA_Updater {
 			return $res;
 		}
 		$code = (int) wp_remote_retrieve_response_code( $res );
-		$data = json_decode( (string) wp_remote_retrieve_body( $res ), true );
+		$body = (string) wp_remote_retrieve_body( $res );
+		$data = json_decode( $body, true );
 		if ( 200 !== $code ) {
 			$msg = isset( $data['message'] ) ? $data['message'] : 'HTTP ' . $code;
 			if ( 404 === $code ) {
@@ -86,51 +90,44 @@ class SVA_Updater {
 			}
 			return new WP_Error( 'gh_http', $msg );
 		}
-		return $data;
+		return $raw ? $body : $data;
 	}
 
 	/**
-	 * Newest version tag. Cached for 6 hours (errors for 30 minutes).
+	 * Version available on the release branch. Cached for 6 hours (errors for 30 minutes).
 	 *
-	 * @return array|WP_Error { version, tag, zip, notes }
+	 * @return array|WP_Error { version, zip, notes }
 	 */
 	public function latest( $force = false ) {
 		$c = get_site_transient( $this->cache );
 		if ( ! $force && is_array( $c ) ) {
 			return isset( $c['error'] ) ? new WP_Error( 'gh_cached', $c['error'] ) : $c;
 		}
-		$tags = $this->api( '/tags?per_page=100' );
-		if ( is_wp_error( $tags ) ) {
-			set_site_transient( $this->cache, array( 'error' => $tags->get_error_message() ), 30 * MINUTE_IN_SECONDS );
-			return $tags;
-		}
-		$best = null;
-		foreach ( (array) $tags as $t ) {
-			$name = isset( $t['name'] ) ? (string) $t['name'] : '';
-			if ( ! preg_match( '/^v?(\d+(?:\.\d+){0,3})$/', $name, $m ) ) {
-				continue;
+		$ref  = rawurlencode( $this->branch );
+		$main = $this->api( '/contents/' . rawurlencode( basename( $this->file ) ) . '?ref=' . $ref, true );
+		if ( is_wp_error( $main ) || ! preg_match( '/^[ \t\/*#@]*Version:\s*([0-9][0-9A-Za-z.\-]*)/mi', (string) $main, $m ) ) {
+			$err = is_wp_error( $main ) ? $main->get_error_message() : 'شماره نسخه در فایل اصلی افزونه پیدا نشد.';
+			if ( is_wp_error( $main ) && 'gh_http' === $main->get_error_code() && false !== strpos( $err, 'پیدا نشد' ) && $this->token() ) {
+				$err .= ' (یا شاخه ' . $this->branch . ' هنوز ساخته نشده است)';
 			}
-			if ( ! $best || version_compare( $m[1], $best['version'], '>' ) ) {
-				$best = array( 'version' => $m[1], 'tag' => $name );
-			}
+			set_site_transient( $this->cache, array( 'error' => $err ), 30 * MINUTE_IN_SECONDS );
+			return new WP_Error( 'gh_none', $err );
 		}
-		if ( ! $best ) {
-			set_site_transient( $this->cache, array( 'error' => 'هنوز نسخه‌ای (تگ v…) در مخزن منتشر نشده است.' ), 30 * MINUTE_IN_SECONDS );
-			return new WP_Error( 'gh_none', 'no tags' );
-		}
-		$best['zip']   = 'https://api.github.com/repos/' . $this->repo . '/zipball/' . rawurlencode( $best['tag'] );
-		$best['notes'] = array();
+		$best = array(
+			'version' => $m[1],
+			'zip'     => 'https://api.github.com/repos/' . $this->repo . '/zipball/' . $ref,
+			'notes'   => array(),
+		);
 		if ( version_compare( $best['version'], $this->version, '>' ) ) {
-			// Change list = commit messages between the installed version and the new one.
-			$cmp = $this->api( '/compare/' . rawurlencode( 'v' . $this->version ) . '...' . rawurlencode( $best['tag'] ) );
-			if ( ! is_wp_error( $cmp ) && ! empty( $cmp['commits'] ) ) {
-				foreach ( array_reverse( $cmp['commits'] ) as $cm ) {
-					$line = strtok( (string) $cm['commit']['message'], "\n" );
-					if ( '' !== trim( $line ) ) {
-						$best['notes'][] = $line;
+			// Change list = commits whose subject starts with a newer version ("2.6.0: …").
+			$commits = $this->api( '/commits?sha=' . $ref . '&per_page=40' );
+			if ( ! is_wp_error( $commits ) ) {
+				foreach ( (array) $commits as $cm ) {
+					$line = strtok( (string) ( isset( $cm['commit']['message'] ) ? $cm['commit']['message'] : '' ), "\n" );
+					if ( preg_match( '/^v?(\d+(?:\.\d+)+)\s*[:\-–]\s*(.+)$/u', $line, $mm ) && version_compare( $mm[1], $this->version, '>' ) ) {
+						$best['notes'][] = $mm[1] . ' — ' . $mm[2];
 					}
 				}
-				$best['notes'] = array_slice( $best['notes'], 0, 30 );
 			}
 		}
 		set_site_transient( $this->cache, $best, 6 * HOUR_IN_SECONDS );
