@@ -1,7 +1,7 @@
 === Smart Visitor Assistant – دستیار هوشمند بازدیدکننده ===
 Requires at least: 5.8
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.2.1
 License: GPLv2 or later
 
 دستیار چت هوشمند که سایت را خودش تحلیل می‌کند و بازدیدکننده را راهنمایی می‌کند.

@@ -72,7 +72,8 @@ class SVA_Updater {
 		if ( $this->token() ) {
 			$headers['Authorization'] = 'Bearer ' . $this->token();
 		}
-		$res = wp_remote_get( 'https://api.github.com/repos/' . $this->repo . $path, array( 'timeout' => 15, 'headers' => $headers ) );
+		$url = ( '/../../user' === $path ) ? 'https://api.github.com/user' : 'https://api.github.com/repos/' . $this->repo . $path;
+		$res = wp_remote_get( $url, array( 'timeout' => 15, 'headers' => $headers ) );
 		if ( is_wp_error( $res ) ) {
 			return $res;
 		}
@@ -106,10 +107,7 @@ class SVA_Updater {
 		$ref  = rawurlencode( $this->branch );
 		$main = $this->api( '/contents/' . rawurlencode( basename( $this->file ) ) . '?ref=' . $ref, true );
 		if ( is_wp_error( $main ) || ! preg_match( '/^[ \t\/*#@]*Version:\s*([0-9][0-9A-Za-z.\-]*)/mi', (string) $main, $m ) ) {
-			$err = is_wp_error( $main ) ? $main->get_error_message() : 'شماره نسخه در فایل اصلی افزونه پیدا نشد.';
-			if ( is_wp_error( $main ) && 'gh_http' === $main->get_error_code() && false !== strpos( $err, 'پیدا نشد' ) && $this->token() ) {
-				$err .= ' (یا شاخه ' . $this->branch . ' هنوز ساخته نشده است)';
-			}
+			$err = is_wp_error( $main ) ? $this->diagnose( $main ) : 'شماره نسخه در فایل اصلی افزونه پیدا نشد.';
 			set_site_transient( $this->cache, array( 'error' => $err ), 30 * MINUTE_IN_SECONDS );
 			return new WP_Error( 'gh_none', $err );
 		}
@@ -132,6 +130,31 @@ class SVA_Updater {
 		}
 		set_site_transient( $this->cache, $best, 6 * HOUR_IN_SECONDS );
 		return $best;
+	}
+
+	/** Turn a failed request into a precise, actionable message. */
+	private function diagnose( $error ) {
+		if ( ! $this->token() ) {
+			return 'مخزن خصوصی است و توکن گیت‌هاب وارد نشده است.';
+		}
+		$tok = $this->token();
+		if ( preg_match( '/\s/', $tok ) || strlen( $tok ) < 30 ) {
+			return 'توکن ذخیره‌شده ناقص است یا فاصله دارد؛ آن را دوباره کامل کپی و ذخیره کنید.';
+		}
+		$user = $this->api( '/../../user' );
+		if ( is_wp_error( $user ) && false !== strpos( $user->get_error_message(), 'نامعتبر' ) ) {
+			return 'توکن نامعتبر یا منقضی است. یک توکن جدید بسازید.';
+		}
+		$repo = $this->api( '' );
+		if ( is_wp_error( $repo ) ) {
+			$who = ( ! is_wp_error( $user ) && ! empty( $user['login'] ) ) ? ' (توکن متعلق به ' . $user['login'] . ' است)' : '';
+			return 'توکن معتبر است ولی به مخزن ' . $this->repo . ' دسترسی ندارد' . $who . '. در تنظیمات توکن، بخش Repository access باید «Only select repositories» باشد و این مخزن انتخاب شده باشد؛ اگر Resource owner حساب دیگری است، توکن را با مالک arst2020 بسازید.';
+		}
+		$branch = $this->api( '/branches/' . rawurlencode( $this->branch ) );
+		if ( is_wp_error( $branch ) ) {
+			return 'توکن مخزن را می‌بیند ولی اجازه «Contents: Read-only» ندارد (یا شاخه ' . $this->branch . ' وجود ندارد). در تنظیمات توکن، بخش Permissions ← Repository permissions، گزینه Contents را روی Read-only بگذارید و ذخیره کنید.';
+		}
+		return 'توکن مخزن و شاخه را می‌بیند ولی خواندن فایل ممکن نشد؛ اجازه «Contents: Read-only» را بررسی کنید. (' . $error->get_error_message() . ')';
 	}
 
 	/* ---------------- WordPress update hooks ---------------- */
@@ -251,7 +274,7 @@ class SVA_Updater {
 		check_admin_referer( $this->page );
 		$msg = 'checked';
 		if ( isset( $_POST['save_token'] ) && ! defined( 'SVA_GITHUB_TOKEN' ) ) {
-			$tok = isset( $_POST['token'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['token'] ) ) ) : '';
+			$tok = isset( $_POST['token'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['token'] ) ), " \t\n\r\0\x0B'\"" ) : '';
 			if ( ! empty( $_POST['clear_token'] ) ) {
 				delete_option( $this->opt );
 			} elseif ( '' !== $tok ) {
