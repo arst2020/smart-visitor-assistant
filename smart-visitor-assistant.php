@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Smart Visitor Assistant – دستیار هوشمند بازدیدکننده
  * Description:       دستیار هوشمند چت برای بازدیدکنندگان سایت. بعد از نصب، سایت را خودش بررسی و تحلیل می‌کند (برگه‌ها، نوشته‌ها، محصولات ووکامرس، منوها و اطلاعات تماس)، نوع سایت را تشخیص می‌دهد و بازدیدکننده را به خدمات، محصولات و بخش‌هایی مثل نوبت‌دهی راهنمایی می‌کند. با و بدون هوش مصنوعی (Claude یا سرویس‌های سازگار با OpenAI) کار می‌کند.
- * Version:           1.2.1
+ * Version:           1.3.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            nfpsmart
@@ -12,7 +12,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'SVA_VERSION', '1.2.1' );
+define( 'SVA_VERSION', '1.3.0' );
 define( 'SVA_DB_VERSION', '1' );
 define( 'SVA_FILE', __FILE__ );
 define( 'SVA_DIR', plugin_dir_path( __FILE__ ) );

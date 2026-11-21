@@ -1,0 +1,59 @@
+# Builds the installable zip and publishes a GitHub Release whenever the plugin version changes.
+# Bump "Version:" (and SVA_VERSION) in smart-visitor-assistant.php, push to main -> release vX.Y.Z appears.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['smart-visitor-assistant.php']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: v
+        run: |
+          VER=$(grep -m1 -E '^[[:space:]]*\*[[:space:]]*Version:' smart-visitor-assistant.php | sed -E 's/.*Version:[[:space:]]*//' | tr -d '[:space:]')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$VER" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v$VER already exists - nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check SVA_VERSION matches the header
+        if: steps.v.outputs.exists == 'false'
+        run: grep -q "define( 'SVA_VERSION', '${{ steps.v.outputs.version }}' );" smart-visitor-assistant.php
+
+      - name: Build installable zip
+        if: steps.v.outputs.exists == 'false'
+        run: |
+          mkdir -p build/smart-visitor-assistant
+          git archive HEAD | tar -x -C build/smart-visitor-assistant
+          cd build && zip -qr smart-visitor-assistant.zip smart-visitor-assistant
+
+      - name: Release notes (commits since the previous release)
+        if: steps.v.outputs.exists == 'false'
+        run: |
+          PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          git log ${PREV:+$PREV..}HEAD --no-merges --format='- %s' > notes.md
+          printf '\n---\nنصب: فایل smart-visitor-assistant.zip را دانلود کنید و از پیشخوان وردپرس، افزونه‌ها ← افزودن ← بارگذاری افزونه، نصب کنید.\n' >> notes.md
+          cat notes.md
+
+      - name: Publish release
+        if: steps.v.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" build/smart-visitor-assistant.zip \
+            --title "v${{ steps.v.outputs.version }}" --notes-file notes.md --target "$GITHUB_SHA"

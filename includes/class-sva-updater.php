@@ -1,14 +1,14 @@
 <?php
 /**
- * Self-update from GitHub (works with private repositories via a read-only token).
+ * Self-update from GitHub Releases.
  *
- * New versions are published by pushing to the "release" branch (the Version: header of the
- * main plugin file on that branch is the available version). WordPress then shows the normal
- * "update available" notice and the plugin can be updated from Plugins / Dashboard → Updates,
- * including WordPress auto-updates.
+ * Every version is published as a GitHub Release (tag vX.Y.Z) with the installable
+ * smart-visitor-assistant.zip attached (built automatically by .github/workflows/release.yml).
+ * WordPress shows the normal "update available" notice, one-click update, auto-updates,
+ * and the release notes as changelog.
  *
- * Token: define( 'SVA_GITHUB_TOKEN', 'github_pat_…' ) in wp-config.php, or enter it on the plugin's
- * "به‌روزرسانی" page. A fine-grained token with "Contents: Read-only" on this one repository is enough.
+ * The repository is public, so no token is needed. If it is ever made private again, set
+ * define( 'SVA_GITHUB_TOKEN', 'github_pat_…' ) in wp-config.php or enter it on the "به‌روزرسانی" page.
  */
 defined( 'ABSPATH' ) || exit;
 
@@ -23,7 +23,6 @@ class SVA_Updater {
 	private $page;
 	private $opt;
 	private $cache;
-	private $branch;
 
 	/**
 	 * @param string $file    Main plugin file.
@@ -31,8 +30,7 @@ class SVA_Updater {
 	 * @param string $version Installed version.
 	 * @param string $parent  Admin menu slug to attach the "Updates" page to.
 	 */
-	public function __construct( $file, $repo, $version, $parent, $branch = 'release' ) {
-		$this->branch   = $branch;
+	public function __construct( $file, $repo, $version, $parent ) {
 		$this->file     = $file;
 		$this->basename = plugin_basename( $file );
 		$this->slug     = dirname( $this->basename );
@@ -83,7 +81,7 @@ class SVA_Updater {
 		if ( 200 !== $code ) {
 			$msg = isset( $data['message'] ) ? $data['message'] : 'HTTP ' . $code;
 			if ( 404 === $code ) {
-				$msg = $this->token() ? 'مخزن پیدا نشد یا توکن به آن دسترسی ندارد.' : 'مخزن خصوصی است؛ توکن گیت‌هاب لازم است.';
+				$msg = 'not_found';
 			} elseif ( 401 === $code ) {
 				$msg = 'توکن گیت‌هاب نامعتبر یا منقضی است.';
 			} elseif ( 403 === $code ) {
@@ -95,47 +93,63 @@ class SVA_Updater {
 	}
 
 	/**
-	 * Version available on the release branch. Cached for 6 hours (errors for 30 minutes).
+	 * Latest GitHub Release. Cached for 6 hours (errors for 30 minutes).
 	 *
-	 * @return array|WP_Error { version, zip, notes }
+	 * @return array|WP_Error { version, zip, notes, url }
 	 */
 	public function latest( $force = false ) {
 		$c = get_site_transient( $this->cache );
 		if ( ! $force && is_array( $c ) ) {
 			return isset( $c['error'] ) ? new WP_Error( 'gh_cached', $c['error'] ) : $c;
 		}
-		$ref  = rawurlencode( $this->branch );
-		$main = $this->api( '/contents/' . rawurlencode( basename( $this->file ) ) . '?ref=' . $ref, true );
-		if ( is_wp_error( $main ) || ! preg_match( '/^[ \t\/*#@]*Version:\s*([0-9][0-9A-Za-z.\-]*)/mi', (string) $main, $m ) ) {
-			$err = is_wp_error( $main ) ? $this->diagnose( $main ) : 'شماره نسخه در فایل اصلی افزونه پیدا نشد.';
+		$rel = $this->api( '/releases/latest' );
+		if ( is_wp_error( $rel ) || empty( $rel['tag_name'] ) || ! preg_match( '/^v?(\d+(?:\.\d+){0,3})/', $rel['tag_name'], $m ) ) {
+			$err = is_wp_error( $rel ) ? $this->diagnose( $rel ) : 'آخرین ریلیز شماره نسخه معتبری ندارد.';
 			set_site_transient( $this->cache, array( 'error' => $err ), 30 * MINUTE_IN_SECONDS );
 			return new WP_Error( 'gh_none', $err );
 		}
-		$best = array(
-			'version' => $m[1],
-			'zip'     => 'https://api.github.com/repos/' . $this->repo . '/zipball/' . $ref,
-			'notes'   => array(),
-		);
-		if ( version_compare( $best['version'], $this->version, '>' ) ) {
-			// Change list = commits whose subject starts with a newer version ("2.6.0: …").
-			$commits = $this->api( '/commits?sha=' . $ref . '&per_page=40' );
-			if ( ! is_wp_error( $commits ) ) {
-				foreach ( (array) $commits as $cm ) {
-					$line = strtok( (string) ( isset( $cm['commit']['message'] ) ? $cm['commit']['message'] : '' ), "\n" );
-					if ( preg_match( '/^v?(\d+(?:\.\d+)+)\s*[:\-–]\s*(.+)$/u', $line, $mm ) && version_compare( $mm[1], $this->version, '>' ) ) {
-						$best['notes'][] = $mm[1] . ' — ' . $mm[2];
-					}
+		$zip = '';
+		foreach ( (array) ( isset( $rel['assets'] ) ? $rel['assets'] : array() ) as $as ) {
+			if ( isset( $as['name'] ) && preg_match( '/\.zip$/i', $as['name'] ) ) {
+				// Private repo: download through the API with the token; public: direct link.
+				$zip = $this->token() ? $as['url'] : $as['browser_download_url'];
+				if ( $this->slug . '.zip' === $as['name'] ) {
+					break;
 				}
 			}
 		}
+		if ( '' === $zip ) {
+			$zip = 'https://api.github.com/repos/' . $this->repo . '/zipball/' . rawurlencode( $rel['tag_name'] );
+		}
+		$notes = array();
+		foreach ( preg_split( '/\r?\n/', (string) ( isset( $rel['body'] ) ? $rel['body'] : '' ) ) as $line ) {
+			$line = trim( preg_replace( '/^\s*[-*•]\s*/u', '', $line ) );
+			if ( '' !== $line && ! preg_match( '/^(#|\*\*Full Changelog|Full Changelog)/i', $line ) ) {
+				$notes[] = wp_strip_all_tags( $line );
+			}
+		}
+		$best = array(
+			'version' => $m[1],
+			'zip'     => $zip,
+			'notes'   => array_slice( $notes, 0, 30 ),
+			'url'     => isset( $rel['html_url'] ) ? $rel['html_url'] : 'https://github.com/' . $this->repo . '/releases',
+		);
 		set_site_transient( $this->cache, $best, 6 * HOUR_IN_SECONDS );
 		return $best;
 	}
 
 	/** Turn a failed request into a precise, actionable message. */
 	private function diagnose( $error ) {
+		$msg = $error->get_error_message();
+		if ( 'not_found' !== $msg ) {
+			return $msg;
+		}
+		$repo = $this->api( '' );
+		if ( ! is_wp_error( $repo ) ) {
+			return 'هنوز هیچ ریلیزی در مخزن منتشر نشده است.';
+		}
 		if ( ! $this->token() ) {
-			return 'مخزن خصوصی است و توکن گیت‌هاب وارد نشده است.';
+			return 'مخزن پیدا نشد یا خصوصی است. اگر مخزن خصوصی است، توکن گیت‌هاب را وارد کنید.';
 		}
 		$tok = $this->token();
 		if ( preg_match( '/\s/', $tok ) || strlen( $tok ) < 30 ) {
@@ -145,16 +159,7 @@ class SVA_Updater {
 		if ( is_wp_error( $user ) && false !== strpos( $user->get_error_message(), 'نامعتبر' ) ) {
 			return 'توکن نامعتبر یا منقضی است. یک توکن جدید بسازید.';
 		}
-		$repo = $this->api( '' );
-		if ( is_wp_error( $repo ) ) {
-			$who = ( ! is_wp_error( $user ) && ! empty( $user['login'] ) ) ? ' (توکن متعلق به ' . $user['login'] . ' است)' : '';
-			return 'توکن معتبر است ولی به مخزن ' . $this->repo . ' دسترسی ندارد' . $who . '. در تنظیمات توکن، بخش Repository access باید «Only select repositories» باشد و این مخزن انتخاب شده باشد؛ اگر Resource owner حساب دیگری است، توکن را با مالک arst2020 بسازید.';
-		}
-		$branch = $this->api( '/branches/' . rawurlencode( $this->branch ) );
-		if ( is_wp_error( $branch ) ) {
-			return 'توکن مخزن را می‌بیند ولی اجازه «Contents: Read-only» ندارد (یا شاخه ' . $this->branch . ' وجود ندارد). در تنظیمات توکن، بخش Permissions ← Repository permissions، گزینه Contents را روی Read-only بگذارید و ذخیره کنید.';
-		}
-		return 'توکن مخزن و شاخه را می‌بیند ولی خواندن فایل ممکن نشد؛ اجازه «Contents: Read-only» را بررسی کنید. (' . $error->get_error_message() . ')';
+		return 'توکن به مخزن ' . $this->repo . ' دسترسی ندارد. در تنظیمات توکن، این مخزن را در Repository access انتخاب کنید و Contents را روی Read-only بگذارید.';
 	}
 
 	/* ---------------- WordPress update hooks ---------------- */
@@ -217,10 +222,11 @@ class SVA_Updater {
 
 	/** Send the token with the zip download (GitHub API → codeload redirect). */
 	public function auth_download( $args, $url ) {
-		if ( $this->token() && 0 === strpos( $url, 'https://api.github.com/repos/' . $this->repo . '/zipball/' ) ) {
+		$base = 'https://api.github.com/repos/' . $this->repo . '/';
+		if ( $this->token() && ( 0 === strpos( $url, $base . 'zipball/' ) || 0 === strpos( $url, $base . 'releases/assets/' ) ) ) {
 			$args['headers']                  = isset( $args['headers'] ) ? (array) $args['headers'] : array();
 			$args['headers']['Authorization'] = 'Bearer ' . $this->token();
-			$args['headers']['Accept']        = 'application/vnd.github+json';
+			$args['headers']['Accept']        = ( false !== strpos( $url, '/releases/assets/' ) ) ? 'application/octet-stream' : 'application/vnd.github+json';
 		}
 		return $args;
 	}
@@ -310,7 +316,7 @@ class SVA_Updater {
 						<?php echo $has_new ? ' <strong style="color:#00701a">— نسخه جدید موجود است</strong>' : ' — افزونه به‌روز است ✔'; ?>
 					<?php endif; ?>
 				</td></tr>
-				<tr><th>مخزن</th><td><a href="<?php echo esc_url( 'https://github.com/' . $this->repo ); ?>" target="_blank" dir="ltr"><?php echo esc_html( $this->repo ); ?></a></td></tr>
+				<tr><th>مخزن</th><td><a href="<?php echo esc_url( 'https://github.com/' . $this->repo ); ?>" target="_blank" dir="ltr"><?php echo esc_html( $this->repo ); ?></a> — <a href="<?php echo esc_url( 'https://github.com/' . $this->repo . '/releases' ); ?>" target="_blank">همه نسخه‌ها (Releases)</a></td></tr>
 				<tr><th>به‌روزرسانی خودکار</th><td><?php echo $auto ? 'فعال است' : 'غیرفعال'; ?> <span class="description">(از صفحه افزونه‌ها، ستون «به‌روزرسانی‌های خودکار» قابل تغییر است)</span></td></tr>
 			</table>
 
@@ -325,8 +331,10 @@ class SVA_Updater {
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 				<input type="hidden" name="action" value="<?php echo esc_attr( $this->page ); ?>">
 				<?php wp_nonce_field( $this->page ); ?>
-				<h2>توکن گیت‌هاب</h2>
-				<p class="description">چون مخزن خصوصی است، وردپرس برای دیدن و دانلود نسخه‌ها به یک توکن «فقط‌خواندنی» نیاز دارد. در گیت‌هاب: Settings ← Developer settings ← Fine-grained tokens ← Generate new token؛ در Repository access فقط <code dir="ltr"><?php echo esc_html( $this->repo ); ?></code> را انتخاب کنید و در Permissions فقط <code dir="ltr">Contents: Read-only</code> را بدهید.</p>
+				<p><button class="button" name="check" value="1">بررسی دوباره</button></p>
+				<details<?php echo $this->token() ? ' open' : ''; ?>>
+				<summary><strong>توکن گیت‌هاب (اختیاری — فقط اگر مخزن خصوصی باشد)</strong></summary>
+				<p class="description">مخزن عمومی است و برای به‌روزرسانی به توکن نیازی نیست. اگر روزی مخزن خصوصی شد، یک توکن «فقط‌خواندنی» بسازید: در گیت‌هاب Settings ← Developer settings ← Fine-grained tokens ← Generate new token؛ در Repository access فقط <code dir="ltr"><?php echo esc_html( $this->repo ); ?></code> را انتخاب کنید و در Permissions فقط <code dir="ltr">Contents: Read-only</code> را بدهید.</p>
 				<?php if ( $const ) : ?>
 					<p>✔ توکن در <code>wp-config.php</code> تعریف شده است (<code dir="ltr">SVA_GITHUB_TOKEN</code>).</p>
 				<?php else : ?>
@@ -335,9 +343,9 @@ class SVA_Updater {
 						<?php if ( $this->token() ) : ?><label><input type="checkbox" name="clear_token" value="1"> حذف توکن</label><?php endif; ?>
 					</p>
 					<p class="description">امن‌تر: به‌جای این‌جا در wp-config.php بنویسید <code dir="ltr">define( 'SVA_GITHUB_TOKEN', 'github_pat_…' );</code></p>
-					<p><button class="button button-primary" name="save_token" value="1">ذخیره و بررسی</button> <button class="button" name="check" value="1">فقط بررسی دوباره</button></p>
+					<p><button class="button button-primary" name="save_token" value="1">ذخیره توکن و بررسی</button></p>
 				<?php endif; ?>
-				<?php if ( $const ) : ?><p><button class="button" name="check" value="1">بررسی دوباره</button></p><?php endif; ?>
+				</details>
 			</form>
 		</div>
 		<?php
